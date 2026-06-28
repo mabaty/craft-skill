@@ -1,6 +1,6 @@
 ---
 name: craft
-version: 2.0.1
+version: 2.0.2
 description: Create and format Craft documents reliably via the Craft MCP v2 unified API (craft_write / craft_read). Triggers on any Craft document or note creation, editing, or formatting — including when building project docs, meeting notes, specs, or any structured content in Craft. Ensures correct block structure, ordering, and element syntax on the first pass.
 ---
 
@@ -102,7 +102,7 @@ control and preserves array order:
 | Toggle | `+ Toggle title` | `{"listStyle":"toggle","markdown":"+ Toggle title"}` | Content = subsequent blocks with higher `indentationLevel` |
 | Blockquote | `> Quoted text` | `{"decorations":["quote"]}` | |
 | Callout | `<callout>Text</callout>` | `{"decorations":["callout"]}` | |
-| Highlight | `==Highlighted text==` | Inline | Renders yellow by default |
+| Highlight | `==Highlighted text==` | Inline | Renders yellow by default. Custom colors via `<highlight color='name'>` — see below |
 | Divider | `---` or `***` | `{"type":"line"}` | |
 | Link | `[text](url)` | Inline | |
 | **Code block** | ❌ Fenced ``` does NOT work | `{"type":"code","rawCode":"...","language":"python"}` | **JSON only** |
@@ -360,11 +360,14 @@ Text blocks support `textAlignment`: `left` (default), `center`, `right`, `justi
 
 ### Block Colors
 
-Any block can be colored via `decorations` with a `color` property:
+Any block can be colored via a top-level `color` field (not inside `decorations`):
 
 ```json
-{"type":"text","decorations":[{"color":"#FF6B6B"}],"markdown":"Red text"}
+{"type":"text","color":"#FF6B6B","markdown":"Red text"}
 ```
+
+The `color` field accepts 7-character hex codes (`#RRGGBB`). Craft auto-adjusts
+for readability and generates a dark variant automatically.
 
 ### Markdown Special Tokens
 
@@ -375,10 +378,14 @@ Beyond standard markdown, Craft supports these HTML-like tokens in `--markdown` 
 | `<callout>Text</callout>` | Callout/highlight block (can wrap multiple paragraphs) |
 | `<caption>Text</caption>` | Caption text style |
 | `<highlight>Text</highlight>` | Yellow highlight (inline) |
-| `<highlight color='#FF6B6B'>Text</highlight>` | Custom color highlight |
+| `<highlight color='red'>Text</highlight>` | Custom color highlight (named colors only) |
 | `<page><pageTitle>Title</pageTitle><content>...</content></page>` | Nested page/card structure |
 | `[text](block://blockId)` | Block link — links to a specific block by ID |
 | `[text](date://YYYY-MM-DD)` | Date link — links to a daily note |
+
+**Highlight color names** (not hex): `yellow`, `green`, `mint`, `cyan`, `blue`,
+`purple`, `pink`, `red`, `gray`, `gradient-blue`, `gradient-purple`,
+`gradient-red`, `gradient-yellow`, `gradient-brown`.
 
 ### Divider Styles
 
