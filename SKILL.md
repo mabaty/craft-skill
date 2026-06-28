@@ -1,10 +1,25 @@
 ---
 name: craft
-version: 2.0.0
+version: 2.0.1
 description: Create and format Craft documents reliably via the Craft MCP v2 unified API (craft_write / craft_read). Triggers on any Craft document or note creation, editing, or formatting — including when building project docs, meeting notes, specs, or any structured content in Craft. Ensures correct block structure, ordering, and element syntax on the first pass.
 ---
 
 # craft — Reliable Craft Document Creation (MCP v2)
+
+## ⚠️ Production Data Warning
+
+Craft MCP connects to a **production server with real user data**. Only perform
+operations that can be safely rolled back:
+
+- ✅ **Safe**: Reading data, creating test content you delete immediately
+- ✅ **Safe**: Modifying content if you can restore it to its original state
+- ✅ **Safe**: Moving blocks if you can move them back
+- ❌ **Unsafe**: Permanent deletions, modifications without backup, or any
+  changes you cannot reverse
+
+Always verify rollback operations work before considering a task complete.
+
+## The Unified Tool Model
 
 The Craft MCP v2 server exposes **three tools**: `craft_write`, `craft_read`,
 and `blocks_revert`. Everything — blocks, documents, tasks, collections,
@@ -23,6 +38,10 @@ v1's 32+ individual tool endpoints.
 Both `craft_write` and `craft_read` take a single `command` string argument.
 Multiple commands can be batched with semicolons (`;`) in a single call —
 execution stops on the first failure, but earlier commands are already applied.
+
+**Key concept**: A document ID is the same as its root block ID. Use it
+interchangeably — `documents create` returns a `rootBlockId` that is the
+document's identifier for all block operations.
 
 ## The Newline Rule (unchanged from v1)
 
@@ -61,7 +80,7 @@ control and preserves array order:
 [
   {"type":"text","textStyle":"h2","markdown":"## Section"},
   {"type":"text","listStyle":"bullet","markdown":"- Item one"},
-  {"type":"code","rawCode":"print(\"hello\")","codeLanguage":"python"},
+  {"type":"code","rawCode":"print(\"hello\")","language":"python"},
   {"type":"text","listStyle":"task","markdown":"- [x] Done","taskInfo":{"state":"done"}}
 ]
 ```
@@ -86,15 +105,29 @@ control and preserves array order:
 | Highlight | `==Highlighted text==` | Inline | Renders yellow by default |
 | Divider | `---` or `***` | `{"type":"line"}` | |
 | Link | `[text](url)` | Inline | |
-| **Code block** | ❌ Fenced ``` does NOT work | `{"type":"code","rawCode":"...","codeLanguage":"python"}` | **JSON only** |
+| **Code block** | ❌ Fenced ``` does NOT work | `{"type":"code","rawCode":"...","language":"python"}` | **JSON only** |
+| **Image** | — | `{"type":"image","url":"https://...","altText":"...","size":"fit\|fill","width":"auto\|fullWidth"}` | Inline image block |
+| **Video** | — | `{"type":"video","url":"https://...","altText":"..."}` | Inline video block |
+| **File** | — | `{"type":"file","url":"https://...","fileName":"doc.pdf","blockLayout":"small\|regular\|card"}` | File attachment |
+| **Drawing** | — | `{"type":"drawing","url":"https://..."}` | Hand-drawn content |
+| **Table** | — | `{"type":"table"}` | Structured table |
+| **Rich URL** | — | `{"type":"richUrl","url":"https://...","title":"...","layout":"small\|regular\|card"}` | Rich link preview card |
+| **Card/page** | `<page><pageTitle>Title</pageTitle><content>...</content></page>` | `{"type":"text","textStyle":"card","cardLayout":"small\|square\|regular\|large"}` | Nested page or card block |
 
 ### Code Block Detail
 
 Fenced code blocks are **not supported** in `--markdown` mode. Use JSON mode:
 
 ```json
-{"type":"code","rawCode":"print(\"hello\")\nprint(\"world\")","codeLanguage":"python"}
+{"type":"code","rawCode":"print(\"hello\")\nprint(\"world\")","language":"python"}
 ```
+
+The canonical field is `language` (not `codeLanguage`). Supported languages:
+`ada`, `bash`, `cpp`, `cs`, `css`, `dart`, `dockerfile`, `go`, `groovy`,
+`haskell`, `html`, `java`, `javascript`, `json`, `julia`, `kotlin`, `lua`,
+`markdown`, `matlab`, `objectivec`, `perl`, `php`, `prolog`, `plaintext`,
+`python`, `r`, `ruby`, `rust`, `scala`, `shell`, `sql`, `swift`, `typescript`,
+`vbnet`, `xml`, `yaml`, `math_formula`, `other`.
 
 Within `rawCode`, `\n` produces actual newlines in the code block.
 
@@ -112,8 +145,8 @@ as subsequent blocks with a higher `indentationLevel` than the toggle itself:
 
 ### Nested Content
 
-Use `indentationLevel` for sub-bullets, nested tasks, and indented content
-under list items:
+Use `indentationLevel` (range 0–5) for sub-bullets, nested tasks, and indented
+content under list items:
 
 ```json
 [
@@ -302,7 +335,7 @@ blocks add --id <rootBlockId> --markdown "Content" \
 | Flag | Values |
 |---|---|
 | `--theme-id` | Use `craft_read: "blocks explore-themes --type page"` to list |
-| `--font` | `system`, `system-serif`, `system-rounded`, `system-mono` |
+| `--font` | `system`, `serif`, `rounded`, `mono` (MCP also accepts `system-serif`, `system-rounded`, `system-mono` aliases) |
 | `--separator` | `line`, `doodle`, `washi`, `none` |
 | `--washi-pattern` | `wave`, `hex`, `stripe`, `dot`, etc. |
 | `--washi-color` | `#RRGGBB` |
@@ -317,11 +350,56 @@ blocks add --id <rootBlockId> --markdown "Content" \
 
 Colors accept `#RRGGBB` or `"#light #dark"` for appearance-aware (light/dark mode).
 
+### Text Alignment
+
+Text blocks support `textAlignment`: `left` (default), `center`, `right`, `justify`.
+
+```json
+{"type":"text","textStyle":"h2","textAlignment":"center","markdown":"## Centered Heading"}
+```
+
+### Block Colors
+
+Any block can be colored via `decorations` with a `color` property:
+
+```json
+{"type":"text","decorations":[{"color":"#FF6B6B"}],"markdown":"Red text"}
+```
+
+### Markdown Special Tokens
+
+Beyond standard markdown, Craft supports these HTML-like tokens in `--markdown` mode:
+
+| Token | Effect |
+|---|---|
+| `<callout>Text</callout>` | Callout/highlight block (can wrap multiple paragraphs) |
+| `<caption>Text</caption>` | Caption text style |
+| `<highlight>Text</highlight>` | Yellow highlight (inline) |
+| `<highlight color='#FF6B6B'>Text</highlight>` | Custom color highlight |
+| `<page><pageTitle>Title</pageTitle><content>...</content></page>` | Nested page/card structure |
+| `[text](block://blockId)` | Block link — links to a specific block by ID |
+| `[text](date://YYYY-MM-DD)` | Date link — links to a daily note |
+
+### Divider Styles
+
+Line blocks (`type: "line"`) support `lineStyle` values:
+`strong`, `regular` (default), `light`, `extraLight`, `pageBreak`.
+
+```json
+{"type":"line","lineStyle":"pageBreak"}
+```
+
 ## Reading & Search
 
 ```
-blocks get <rootBlockId> [--depth <depth>] [--format json|markdown]
+blocks get <rootBlockId> [--depth <depth>] [--format json|markdown] [--fetchMetadata true|false]
 blocks get --date today
+```
+
+- `--depth`: `-1` (all descendants, default), `0` (self only), `1` (direct children)
+- `--fetchMetadata`: Returns comments, createdBy, lastModifiedBy, lastModifiedAt, createdAt
+
+```
 documents list [--location unsorted|trash|templates|daily_notes | --folder <folderId>]
 folders list [--filter <regex>]
 tasks list [--scope active|upcoming|inbox|logbook|document|all]
@@ -431,6 +509,8 @@ blocks update --id <rootBlockId> --markdown "New Document Title"
 3. **If broken**: Delete stray blocks with `blocks delete --id <blockId>`,
    fix and re-add
 4. **Report done** only after confirming the readback is clean
+5. **Safety check**: If this was a test, delete the test document or restore
+   original content. This is production data — verify rollback before done.
 
 ## Canonical Example
 
@@ -448,7 +528,7 @@ craft_write: "blocks add --id ABC-123 --json '[
   {"type":"text","textStyle":"h2","markdown":"## Tasks"},
   {"type":"text","listStyle":"task","markdown":"- [ ] Define endpoints","taskInfo":{"state":"todo"}},
   {"type":"text","listStyle":"task","markdown":"- [x] Choose framework","taskInfo":{"state":"done"}},
-  {"type":"code","rawCode":"POST /auth/login\\nContent-Type: application/json","codeLanguage":"http"},
+  {"type":"code","rawCode":"POST /auth/login\\nContent-Type: application/json","language":"http"},
   {"type":"text","decorations":["callout"],"markdown":"Do not store tokens in localStorage"}
 ]'"
 
