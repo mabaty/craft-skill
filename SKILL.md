@@ -1,5 +1,6 @@
 ---
 name: craft
+version: 1.0.0
 description: Create and format Craft documents reliably via the Craft MCP (mcp.craft.do) block API. Triggers on any Craft document or note creation, editing, or formatting — including when building project docs, meeting notes, specs, or any structured content in Craft. Ensures correct block structure, ordering, and element syntax on the first pass.
 ---
 

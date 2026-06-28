@@ -1,6 +1,6 @@
 # craft-skill
 
-A [Craft](https://craft.do) MCP skill for [OpenClaw](https://openclaw.ai) agents. Handles the block-based Craft API so documents come out right on the first pass — correct block structure, ordering, element syntax, and error recovery.
+A [Craft](https://craft.do) MCP skill for AI agents. Handles the block-based Craft API so documents come out right on the first pass — correct block structure, ordering, element syntax, and error recovery.
 
 ## What it does
 
@@ -12,17 +12,17 @@ A [Craft](https://craft.do) MCP skill for [OpenClaw](https://openclaw.ai) agents
 
 ## Install
 
-Copy `SKILL.md` into your OpenClaw skills directory:
+Copy `SKILL.md` into your agent's skills directory. For OpenClaw:
 
 ```bash
 cp SKILL.md ~/.openclaw/workspace/skills/craft/SKILL.md
 ```
 
-That's it. OpenClaw picks it up automatically.
+For other agent frameworks (Hermes, Claude Code, etc.), place it wherever your agent loads skill/reference documents.
 
 ## Requirements
 
-- An OpenClaw workspace with the Craft MCP server connected
+- A Craft MCP server connected to your agent
 - Craft account (the MCP uses your space-scoped link — no separate API key)
 
 ## License
