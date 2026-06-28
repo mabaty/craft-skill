@@ -1,25 +1,30 @@
 ---
 name: craft
-version: 1.0.0
-description: Create and format Craft documents reliably via the Craft MCP (mcp.craft.do) block API. Triggers on any Craft document or note creation, editing, or formatting — including when building project docs, meeting notes, specs, or any structured content in Craft. Ensures correct block structure, ordering, and element syntax on the first pass.
+version: 2.0.0
+description: Create and format Craft documents reliably via the Craft MCP v2 unified API (craft_write / craft_read). Triggers on any Craft document or note creation, editing, or formatting — including when building project docs, meeting notes, specs, or any structured content in Craft. Ensures correct block structure, ordering, and element syntax on the first pass.
 ---
 
-# craft-doc — Reliable Craft Document Creation
+# craft — Reliable Craft Document Creation (MCP v2)
 
-The Craft MCP is a **block-based API**, not a markdown-string API. Documents are
-sequences of typed blocks identified by UUIDs. Understanding this model prevents
-formatting failures, stray blocks, and ordering bugs.
+The Craft MCP v2 server exposes **three tools**: `craft_write`, `craft_read`,
+and `blocks_revert`. Everything — blocks, documents, tasks, collections,
+whiteboards, comments, styling — flows through a single command string passed
+to `craft_write` or `craft_read`. This is a fundamentally different model from
+v1's 32+ individual tool endpoints.
 
-## The Block Model
+## The Unified Tool Model
 
-- Every paragraph, heading, list item, code block, divider, and callout is a
-  **separate block** with its own ID.
-- Blocks are added via `blocks add` (markdown or JSON) and modified via
-  `blocks update`, `blocks delete`, `blocks move`.
-- Read back with `blocks get <rootBlockId> --format markdown` (human) or
-  `--format json` (inspect types, listStyle, taskInfo, decorations).
+| Tool | Purpose | Mutates? |
+|---|---|---|
+| `craft_write` | Create/update/delete documents, blocks, tasks, collections, whiteboards, comments, styling | Yes |
+| `craft_read` | Read documents, search, list folders/tasks/collections, explore themes/washi/Unsplash | No |
+| `blocks_revert` | Undo a previous add/update/delete if blocks are unmodified | Yes |
 
-### The Newline Rule
+Both `craft_write` and `craft_read` take a single `command` string argument.
+Multiple commands can be batched with semicolons (`;`) in a single call —
+execution stops on the first failure, but earlier commands are already applied.
+
+## The Newline Rule (unchanged from v1)
 
 In `--markdown` arguments:
 
@@ -30,65 +35,36 @@ In `--markdown` arguments:
 | Actual newline (shell `$'...\n...'`) | Soft line break within the same block |
 
 **Single `\n` never creates a new block or a soft break.** It produces visible
-`\n` text. This is the #1 cause of broken documents.
+`\n` text. This remains the #1 cause of broken documents.
 
 ## Default Workflow: Whole-Document Creation
 
-For new documents, use **one `blocks add` call with `\n\n`-separated markdown**
-appended to the page root. This creates all blocks in one round trip with
-correct ordering.
-
 ```
-1. documents create → get rootBlockId
-2. blocks add --id <rootBlockId> --markdown "all content\n\nseparated\n\nby\n\ndouble\n\nnewlines"
-3. blocks get <rootBlockId> --format markdown → verify
+1. craft_write: "documents create --title \"My Doc\""  → rootBlockId
+2. craft_write: "blocks add --id <rootBlockId> --json '[...]'"
+3. craft_read:  "blocks get <rootBlockId> --format markdown"  → verify
 ```
 
-### When to Use `--json` Instead of `--markdown`
+### JSON vs Markdown Mode
 
-The `--markdown` mode fails when content contains backticks, nested quotes, or
-other shell-hostile characters. The shell mangles the string before Craft sees it.
+**Always prefer JSON mode.** The v2 command parser is picky — `--markdown`
+values containing emoji, `#`, backticks, or special characters cause
+"Unexpected text" parse errors. JSON mode is always correct.
 
-**Use `--json` arrays when:**
-- Content contains backticks (code references like `gh`, `/mnt/reference/`)
-- Content contains quotes or special characters that break shell quoting
-- You need explicit type control (tasks with `taskInfo`, code blocks, dividers)
-- Building complex documents with mixed element types
+Use `--markdown` only for simple prose, headings, and basic lists with no
+special characters.
 
-`--markdown` is fine for simple prose, headings, and basic lists. When in doubt,
-use JSON — it's always correct.
+**JSON array mode** creates multiple blocks in one call with exact type
+control and preserves array order:
 
-### When Incremental Adds Are Needed
-
-Use individual `blocks add` calls only when:
-- Appending to an existing document
-- Inserting at a specific position
-- Adding code blocks (require JSON mode)
-
-### Sibling Ordering Rule
-
-When adding blocks sequentially after a header/anchor:
-
-- ❌ **Same anchor**: Adding multiple siblings `after` the same block ID produces
-  **reverse order**. Each new block inserts immediately after the anchor,
-  pushing previous additions down.
-- ✅ **Chain anchors**: Each new block uses the **previously added block's ID**
-  as its `--siblingId`. This preserves insertion order.
-
+```json
+[
+  {"type":"text","textStyle":"h2","markdown":"## Section"},
+  {"type":"text","listStyle":"bullet","markdown":"- Item one"},
+  {"type":"code","rawCode":"print(\"hello\")","codeLanguage":"python"},
+  {"type":"text","listStyle":"task","markdown":"- [x] Done","taskInfo":{"state":"done"}}
+]
 ```
-# WRONG (reversed):
-blocks add --siblingId HEADER --markdown "A" --position after  → id_A
-blocks add --siblingId HEADER --markdown "B" --position after  → id_B
-# Result: HEADER → B → A
-
-# CORRECT (chained):
-blocks add --siblingId HEADER --markdown "A" --position after  → id_A
-blocks add --siblingId id_A   --markdown "B" --position after  → id_B
-# Result: HEADER → A → B
-```
-
-**Exception:** JSON array mode (`--json '[{...},{...}]'`) always preserves the
-array order regardless of anchor.
 
 ## Element → Input Mapping
 
@@ -98,176 +74,392 @@ array order regardless of anchor.
 | Paragraph | Plain text | `{"type":"text","markdown":"..."}` | |
 | **Bold** | `**text**` | Inline within markdown | |
 | *Italic* | `*text*` | Inline within markdown | |
-| ~~Strikethrough~~ | `~~text~~` or `~text~` | Inline | Craft normalizes `~~` to `~` |
+| ~~Strikethrough~~ | `~text~` | Inline | Craft normalizes `~~` to `~` |
 | `Inline code` | `` `code` `` | Inline | |
 | Bullet list | `- Item` | `{"listStyle":"bullet","markdown":"- Item"}` | One item = one block |
 | Numbered list | `1. Item` | `{"listStyle":"numbered","markdown":"1. Item"}` | Craft renumbers on display |
-| **Task (open)** | `- [ ] Task text` | `{"listStyle":"task","taskInfo":{"state":"todo"}}` | ✅ Preferred syntax |
-| **Task (done)** | `- [x] Task text` | `{"listStyle":"task","taskInfo":{"state":"done"}}` | ✅ Preferred syntax |
-| Toggle | `+ Toggle title` | `{"listStyle":"toggle"}` | Content = subsequent indented blocks |
+| **Task (open)** | `- [ ] Task` | `{"listStyle":"task","markdown":"- [ ] Task","taskInfo":{"state":"todo"}}` | |
+| **Task (done)** | `- [x] Task` | `{"listStyle":"task","markdown":"- [x] Task","taskInfo":{"state":"done"}}` | |
+| Toggle | `+ Toggle title` | `{"listStyle":"toggle","markdown":"+ Toggle title"}` | Content = subsequent blocks with higher `indentationLevel` |
 | Blockquote | `> Quoted text` | `{"decorations":["quote"]}` | |
 | Callout | `<callout>Text</callout>` | `{"decorations":["callout"]}` | |
 | Highlight | `==Highlighted text==` | Inline | Renders yellow by default |
 | Divider | `---` or `***` | `{"type":"line"}` | |
 | Link | `[text](url)` | Inline | |
-| **Code block** | ❌ Fenced ``` does NOT work | `{"type":"code","rawCode":"..."}` | **JSON only** |
+| **Code block** | ❌ Fenced ``` does NOT work | `{"type":"code","rawCode":"...","codeLanguage":"python"}` | **JSON only** |
 
 ### Code Block Detail
 
-Fenced code blocks (```) are **not supported** in `--markdown` mode. The `\n`
-characters become literal text. Use JSON mode:
+Fenced code blocks are **not supported** in `--markdown` mode. Use JSON mode:
 
-```bash
-blocks add --id <pageId> --json '{"type":"code","rawCode":"print(\"hello\")\nprint(\"world\")","codeLanguage":"python"}'
+```json
+{"type":"code","rawCode":"print(\"hello\")\nprint(\"world\")","codeLanguage":"python"}
 ```
 
 Within `rawCode`, `\n` produces actual newlines in the code block.
 
-### Task/Checkbox Syntax
+### Toggle Content
 
-| Want | Use | Avoid |
-|---|---|---|
-| Open task | `- [ ] text` | `+ text` (this is a toggle, not a task) |
-| Done task | `- [x] text` | `- [done] text` (creates a bullet) |
-| Toggle section | `+ text` | `- [ ] text` (this is a task checkbox) |
+Toggle blocks use `listStyle: "toggle"`. Content inside the toggle is created
+as subsequent blocks with a higher `indentationLevel` than the toggle itself:
 
-### JSON Array for Bulk Blocks
-
-Pass an array to create multiple blocks in one call with exact type control:
-
-```bash
-blocks add --id <pageId> --json '[
-  {"type":"text","textStyle":"h2","markdown":"## Section"},
-  {"type":"text","listStyle":"bullet","markdown":"- Item one"},
-  {"type":"code","rawCode":"SELECT * FROM users","codeLanguage":"sql"},
-  {"type":"text","listStyle":"task","markdown":"- [x] Completed","taskInfo":{"state":"done"}}
-]'
+```json
+[
+  {"type":"text","listStyle":"toggle","markdown":"+ Toggle title","indentationLevel":1},
+  {"type":"text","markdown":"Hidden content inside toggle","indentationLevel":2}
+]
 ```
 
-Array order is always preserved.
+### Nested Content
 
-## Rewriting Existing Documents
+Use `indentationLevel` for sub-bullets, nested tasks, and indented content
+under list items:
 
-### Full Rewrite: Delete and Recreate
-
-When overhauling an entire document, **delete the document and create a fresh one**
-rather than deleting blocks individually:
-
-```bash
-# Fast: one call
-documents delete --document <rootBlockId>
-documents create --title "Same Title" --folder "<folderId>"
-
-# Slow: N calls for N blocks (avoid)
-blocks delete --id <block1>; blocks delete --id <block2>; ...
+```json
+[
+  {"type":"text","listStyle":"numbered","markdown":"1. First step"},
+  {"type":"text","listStyle":"bullet","markdown":"- Sub-bullet","indentationLevel":2},
+  {"type":"text","listStyle":"task","markdown":"- [ ] Nested task","taskInfo":{"state":"todo"},"indentationLevel":2}
+]
 ```
 
-Block-by-block deletion is only worth it when preserving some existing content.
+## Documents
 
-### Renaming a Document
+### Create
 
-`documents move` changes folder/location only — it **cannot rename**. To change
-the title, update the root page block:
-
-```bash
-blocks update --id <rootBlockId> --markdown "New Document Title"
+```
+documents create --title "My Document" [--folder <folderId>] [--destination unsorted|templates]
 ```
 
-The root block ID is the same as the document ID returned by `documents create`.
+Returns a `rootBlockId` for block operations and a Craft app link for humans.
+
+### Resolve Craft Links
+
+```
+documents resolve-link <url>
+```
+
+Pastes a Craft doc URL into the chat? Use `resolve-link` first to get the
+`rootBlockId` — do not use the URL's `documentId` directly.
+
+## Blocks
+
+### Add
+
+```
+blocks add --id <pageId> --markdown <text> [--position start|end]
+blocks add --id <pageId> --json <json>
+blocks add --siblingId <blockId> --markdown <text> [--position before|after]
+blocks add --date <YYYY-MM-DD|today|yesterday|tomorrow> --markdown <text>
+```
+
+### Sibling Ordering Rule
+
+When adding multiple siblings `after` the same block:
+
+- ❌ **Same anchor**: Each new block inserts immediately after the anchor,
+  producing **reverse order**.
+- ✅ **Chain anchors**: Each new block uses the **previously added block's ID**
+  as `--siblingId`.
+
+**Exception:** JSON array mode (`--json '[{...},{...}]'`) always preserves
+array order regardless of anchor.
+
+### Update / Delete / Move
+
+```
+blocks update --id <blockId> --markdown <text>
+blocks delete --id <blockId>
+blocks move --id <blockId> --targetId <pageId> [--position start|end]
+```
+
+`blocks update` replaces the target block's content. To insert after updating,
+use a separate `blocks add --siblingId` call.
+
+## Tasks
+
+```
+tasks add --markdown <text> [--state todo|done|canceled] [--schedule <date>] [--deadline <date>]
+tasks update --id <taskId> [--state done] [--markdown <text>]
+tasks delete --id <taskId>
+```
+
+Dates: `YYYY-MM-DD`, `today`, `tomorrow`, `yesterday`.
+
+## Collections
+
+### Create
+
+```
+collections create --name "Tasks" --title "Task Name" --Status "select:Todo,Done" --Priority "select:Low,High" --Due "date" --Completed "boolean" --document <rootBlockId>
+```
+
+- `--title` sets the row headline column (one per collection, always text).
+- Additional columns defined as `--<PropertyName> <type>[:options]`.
+- Types: `text`, `number`, `boolean`, `date`, `url`, `email`, `phone`,
+  `select:Opt1,Opt2`, `multiSelect:A,B,C`, `relation:targetCollectionId`.
+- Type aliases: `checkbox` → `boolean`, `select` → `singleSelect`, `link` → `url`.
+
+### Add Items
+
+```
+collections items-add --collection <collectionId> --items '<json-array>'
+```
+
+Item JSON format:
+
+```json
+[
+  {
+    "task_name": "Setup MCP v2",
+    "properties": {
+      "status": "Done",
+      "priority": "High",
+      "due": "2026-06-28",
+      "completed": true
+    }
+  }
+]
+```
+
+**Key rule**: The `--title` column name becomes a **snake_case** top-level key
+(e.g., "Task Name" → `task_name`). All other columns go under `properties`.
+Check the schema with `craft_read: "collections schema --collection <id>"`
+if unsure.
+
+### Update / Delete Items
+
+```
+collections items-update --collection <collectionId> --id <itemId> --<PropertyName> <value>
+collections items-delete --collection <collectionId> --id <itemId>
+```
+
+### Views
+
+```
+collections views-create --collection <collectionId> ...
+collections views-update --collection <collectionId> ...
+collections views-delete --collection <collectionId> ...
+collections views-set-active --collection <collectionId> ...
+```
+
+## Whiteboards
+
+### Create
+
+```
+whiteboards create [--position '{"position":"end","pageId":"<rootBlockId>"}']
+```
+
+### Add Elements
+
+```
+whiteboards elements add --whiteboard <whiteboardId> --elements '<json-array>'
+```
+
+Elements use Excalidraw-compatible JSON:
+
+```json
+[
+  {"id":"rect1","type":"rectangle","x":100,"y":100,"width":200,"height":100,"strokeColor":"#FF6B6B","backgroundColor":"#FFE0E0","strokeWidth":2},
+  {"id":"text1","type":"text","x":120,"y":130,"width":160,"text":"Label","fontSize":20},
+  {"id":"arrow1","type":"arrow","x":350,"y":150,"width":100,"height":0,"strokeColor":"#4ECDC4","strokeWidth":3}
+]
+```
+
+### Update / Delete Elements
+
+```
+whiteboards elements update --whiteboard <whiteboardId> --elements '<json-array>'
+whiteboards elements delete --whiteboard <whiteboardId> --ids <id1>,<id2>
+```
+
+## Comments
+
+```
+comments add --comments '[{"blockId":"<blockId>","content":"Comment text"}]'
+```
+
+JSON array of comment objects, each with `blockId` and `content`.
+
+## Page Styling
+
+Styling flags are passed on `blocks add` when adding to a page root:
+
+```
+blocks add --id <rootBlockId> --markdown "Content" \
+  --theme-id soft-spring \
+  --font system-rounded \
+  --separator washi \
+  --washi-pattern wave \
+  --washi-color #FF6B6B \
+  --cover-url https://images.unsplash.com/... \
+  --backdrop-type gradient \
+  --backdrop-colors #FF6B6B,#4ECDC4 \
+  --backdrop-direction top-to-bottom
+```
+
+| Flag | Values |
+|---|---|
+| `--theme-id` | Use `craft_read: "blocks explore-themes --type page"` to list |
+| `--font` | `system`, `system-serif`, `system-rounded`, `system-mono` |
+| `--separator` | `line`, `doodle`, `washi`, `none` |
+| `--washi-pattern` | `wave`, `hex`, `stripe`, `dot`, etc. |
+| `--washi-color` | `#RRGGBB` |
+| `--backdrop-type` | `solid`, `gradient`, `image`, `pattern`, `none` |
+| `--backdrop-color` | `#RRGGBB` (for solid) |
+| `--backdrop-colors` | `#FF6B6B,#4ECDC4` (for gradient) |
+| `--backdrop-direction` | `top-to-bottom`, `left-to-right`, etc. |
+| `--backdrop-url` | Image URL (for image backdrop) |
+| `--cover-url` | Hero/cover image URL |
+| `--cover-crop` | JSON: `x,y,width,height` (values 0.0–1.0) |
+| `--cover-attribution` | Text attribution for cover image |
+
+Colors accept `#RRGGBB` or `"#light #dark"` for appearance-aware (light/dark mode).
+
+## Reading & Search
+
+```
+blocks get <rootBlockId> [--depth <depth>] [--format json|markdown]
+blocks get --date today
+documents list [--location unsorted|trash|templates|daily_notes | --folder <folderId>]
+folders list [--filter <regex>]
+tasks list [--scope active|upcoming|inbox|logbook|document|all]
+collections list [--document <rootBlockId>]
+collections schema --collection <collectionId>
+collections items-get --collection <collectionId>
+collections views-list --collection <collectionId>
+whiteboards elements get --whiteboard <whiteboardId>
+images view --url <image-url>
+search <query> [--location unsorted|trash|templates|daily_notes]
+```
+
+Common flags: `--offset`, `--cursor`, `--filter <regex>`, `--format json|markdown`.
+
+### Explore Themes, Washi, Unsplash
+
+```
+blocks explore-themes --type page|fonts|code
+blocks explore-washi
+blocks search-unsplash <query>
+```
+
+## Batching
+
+Multiple commands can be sent in a single `craft_write` or `craft_read` call,
+separated by semicolons:
+
+```
+folders list; documents list; blocks get ABC-123 --format markdown
+```
+
+**Execution stops on the first failure.** Earlier commands are already
+applied — there is no rollback. Note the partial state if a batch fails midway.
+
+## blocks_revert (Undo)
+
+Reverts a previous add/update/delete operation if the affected blocks have
+not been modified since. Used primarily by Craft's widget UI for undo/redo,
+but available programmatically:
+
+```json
+{
+  "revertInfo": {
+    "operation": "add",
+    "blockIds": ["block-id-1"],
+    "expectedStamps": {"block-id-1": "stamp-value"},
+    "parentBlockId": "page-id",
+    "documentId": "doc-id"
+  }
+}
+```
+
+Operations: `add`, `update`, `delete`. Requires `expectedStamps` matching
+the block states at the time of the original operation.
 
 ## Handling Transient Upstream Errors (502 / 503 / 504)
 
 Craft's MCP endpoint sits behind Cloudflare and intermittently returns
-`502 Bad Gateway` (`origin_bad_gateway`), `503`, or `504`. These are **almost
-always transient** — Cloudflare itself flags them `retryable: true` with a
-`retry_after` hint. Do **not** treat them as fatal, and do **not** loop in
-tight retries that burn tool budget and can wedge the session.
-
-### Recognize the error
-
-A Craft 502 surfaces as a tool error containing JSON like:
-
-```
-"status":502, "error_name":"origin_bad_gateway",
-"retryable":true, "retry_after":60
-```
-
-Any `5xx` from `craft__craft_write` or `craft__craft_read` falls in this
-category. `4xx` errors (400 bad request, 404 not found, 422 validation) do
-**not** — those are real failures in the command and retrying won't help.
+`502 Bad Gateway`, `503`, or `504`. These are **almost always transient**.
 
 ### Backoff policy
 
-1. **First failure**: wait the server-provided `retry_after` (default **60s**
-   if absent), then retry the **exact same** command once.
-2. **Second failure**: wait **120s**, retry once more.
-3. **Third failure**: stop. Report the outage to the user with the last error
-   payload and ask whether to keep waiting or pause the work. Do not silently
-   keep hammering.
+1. **First failure**: wait 60s (or server-provided `retry_after`), retry once.
+2. **Second failure**: wait 120s, retry once more.
+3. **Third failure**: stop. Report the outage and ask whether to keep waiting.
 
 Use `exec sleep <seconds>` between retries — never a tight loop of repeated
 tool calls.
 
 ### Session-safety rules
 
-- **Never abort mid-retry.** Interrupting a sleeping retry has wedged sessions
-  into a `delivery-mirror` death-spiral that forces a transcript reset and
-  drops the model override back to the agent default. If the user wants to
-  cancel, finish the in-flight `sleep` or let the next retry fail cleanly,
-  then stop.
-- **Save progress before retrying.** If you've created the document and are
-  partway through `blocks add` calls, note the `rootBlockId` and the
-  last-successfully-added block ID in your reply before the sleep. That way a
-  reset session can resume instead of restarting from scratch.
+- **Never abort mid-retry.** Interrupting a sleeping retry can wedge sessions.
+- **Save progress before retrying.** Note the `rootBlockId` and last-added
+  block ID in your reply before sleeping.
 - **Prefer fewer, larger writes.** A single `blocks add --json '[...]'` array
-  call has one chance to 502; ten sequential `blocks add` calls have ten
-  chances. When upstream is flaky, batch aggressively.
-- **Read-back is also a write target.** `blocks get` can 502 too. Treat its
-  failures the same way — back off, don't assume the document is broken.
+  has one chance to 502; ten sequential calls have ten chances.
+- **`blocks add` is not idempotent.** A retry after a 502 that actually
+  succeeded server-side will duplicate blocks. Read back and prune duplicates
+  after a successful retry.
 
-### Idempotency note
+## Rewriting Existing Documents
 
-Craft `blocks add` is **not** idempotent — a retry after a 502 that actually
-succeeded server-side will duplicate the blocks. After a successful retry,
-run `blocks get <rootBlockId> --format markdown` and prune any duplicates
-with `blocks delete` before continuing.
+### Full Rewrite: Delete and Recreate
+
+```python
+# Fast: delete and recreate
+craft_write: "documents delete --document <rootBlockId>"
+craft_write: "documents create --title \"Same Title\" --folder <folderId>"
+
+# Slow: block-by-block deletion (avoid)
+craft_write: "blocks delete --id <block1>; blocks delete --id <block2>; ..."
+```
+
+### Renaming a Document
+
+Update the root page block:
+
+```
+blocks update --id <rootBlockId> --markdown "New Document Title"
+```
 
 ## Pre-Finalize Checklist
 
-After creating or editing a document:
-
-1. **Read back**: `blocks get <rootBlockId> --format markdown`
-2. **Verify**: All sections present, no literal `\n` characters visible,
-   correct ordering, no duplicate or stray blocks
+1. **Read back**: `craft_read: "blocks get <rootBlockId> --format markdown"`
+2. **Verify**: All sections present, no literal `\n` characters, correct
+   ordering, no duplicate or stray blocks
 3. **If broken**: Delete stray blocks with `blocks delete --id <blockId>`,
    fix and re-add
 4. **Report done** only after confirming the readback is clean
 
 ## Canonical Example
 
-Create a project doc with heading, tasks, code, and bullets. Uses JSON array
-mode to avoid shell quoting issues:
+Create a project doc with heading, tasks, code, callout, and collection:
 
-```bash
+```
 # Step 1: Create document
-documents create --title "API Spec" --folder "<folderId>" --icon "📋"
+craft_write: "documents create --title \"API Spec\""
 # → rootBlockId: ABC-123
 
 # Step 2: Add all content (JSON array — safe for any characters)
-blocks add --id ABC-123 --json '[
+craft_write: "blocks add --id ABC-123 --json '[
   {"type":"text","textStyle":"h2","markdown":"## Overview"},
   {"type":"text","markdown":"API spec for the auth service."},
   {"type":"text","textStyle":"h2","markdown":"## Tasks"},
   {"type":"text","listStyle":"task","markdown":"- [ ] Define endpoints","taskInfo":{"state":"todo"}},
   {"type":"text","listStyle":"task","markdown":"- [x] Choose framework","taskInfo":{"state":"done"}},
-  {"type":"code","rawCode":"POST /auth/login\nContent-Type: application/json","codeLanguage":"http"},
-  {"type":"text","decorations":["callout"],"markdown":"<callout>Do not store tokens in localStorage</callout>"}
-]'
+  {"type":"code","rawCode":"POST /auth/login\\nContent-Type: application/json","codeLanguage":"http"},
+  {"type":"text","decorations":["callout"],"markdown":"Do not store tokens in localStorage"}
+]'"
 
 # Step 3: Verify
-blocks get ABC-123 --format markdown
+craft_read: "blocks get ABC-123 --format markdown"
 ```
 
-For simple prose-only content without backticks or special characters,
-`--markdown` with `\n\n` separators works in a single call. When in doubt,
-use JSON.
+## Connection Info
+
+```
+craft_read: "connection info"
+```
+
+Returns space ID, connection details, and MCP version.
